@@ -47,19 +47,21 @@ def math_to_unicode(src):
     return s.replace('{','').replace('}','').replace('$','')
 
 # ───────────────────────── run / para 原语 ─────────────────────────
-def run(text, b=False, i=False, sup=False, sz=None):
+def run(text, b=False, i=False, sup=False, sz=None, szcs=None, ics=False):
     rpr = [TNR]
     if b: rpr.append('<w:b/><w:bCs/>')
     if i: rpr.append('<w:i/><w:iCs/>')
+    elif ics: rpr.append('<w:iCs/>')   # 复杂脚本斜体位(题注/脚注：真值带 iCs 但不带 w:i)
     if sup: rpr.append('<w:vertAlign w:val="superscript"/>')
-    if sz: rpr.append(f'<w:sz w:val="{sz}"/><w:szCs w:val="{sz}"/>')
+    if sz: rpr.append(f'<w:sz w:val="{sz}"/><w:szCs w:val="{szcs or sz}"/>')
     return f'<w:r><w:rPr>{"".join(rpr)}</w:rPr><w:t xml:space="preserve">{esc(text)}</w:t></w:r>'
 
-def para(runs_xml, style='Normal', jc='both', numId=None, before=None, after=None, sect=None):
+def para(runs_xml, style='Normal', jc='both', numId=None, before=None, after=None, line=None, sect=None):
     p = [f'<w:pStyle w:val="{style}"/>']
     if numId is not None:
         p.append(f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{numId}"/></w:numPr>')
     sp = []
+    if line is not None: sp.append(f'w:lineRule="auto" w:line="{line}"')
     if before is not None: sp.append(f'w:before="{before}"')
     if after is not None: sp.append(f'w:after="{after}"')
     if sp: p.append(f'<w:spacing {" ".join(sp)}/>')
@@ -71,9 +73,29 @@ HEAD_RPR = f'{TNR}<w:b/><w:bCs/><w:sz w:val="28"/><w:szCs w:val="32"/>'
 def pagebreak():
     return f'<w:p><w:pPr><w:pStyle w:val="Normal"/><w:rPr>{HEAD_RPR}</w:rPr></w:pPr><w:r><w:br w:type="page"/></w:r></w:p>'
 def h1(text, before=None):
-    return para(run(text, b=True, sz=28), jc='both', before=before, after=160)
+    return para(run(text, b=True, sz=28, szcs=32), jc='both', before=before, after=160)
 def h2(text):
     return para(run(text, b=True), jc='both')
+
+NOTE_SENTINEL = '⟦SUBFMTNOTE⟧'   # \scriptsize/\footnotesize → 此哨兵；标记表脚注(9pt)，渲染前剥除
+
+# ───────────────────────── 正文引用(上标编号) ─────────────────────────
+_CITE_KEY2NUM = {}   # bib key → 1-based 编号；main() 在渲染正文前填充(来自 --bibliography 的 \bibitem 顺序)
+
+def _collapse(nums):
+    """[1,2,3,5,6] → '1-3,5-6'：连续号用连字符段，跳号用逗号(与真值一致，无空格)。"""
+    nums = sorted(set(nums)); out = []; k = 0
+    while k < len(nums):
+        j = k
+        while j+1 < len(nums) and nums[j+1] == nums[j]+1: j += 1
+        out.append(str(nums[k]) if j == k else f'{nums[k]}-{nums[j]}')
+        k = j+1
+    return ','.join(out)
+
+def cite_runs(citations, b=False, i=False, sz=None):
+    """pandoc Cite 的 citations 列表(各含 citationId) → 一个上标 run；未知 key 跳过，全空则返回 ''。"""
+    nums = [_CITE_KEY2NUM[c['citationId']] for c in (citations or []) if c.get('citationId') in _CITE_KEY2NUM]
+    return run(_collapse(nums), b=b, i=i, sup=True, sz=sz) if nums else ''
 
 # ───────────────────────── AST inline → runs ─────────────────────────
 def inlines_to_runs(ils, b=False, i=False, sup=False, sz=None):
@@ -91,7 +113,10 @@ def inlines_to_runs(ils, b=False, i=False, sup=False, sz=None):
         elif t == 'Quoted':
             q = '“”' if n['c'][0]['t']=='DoubleQuote' else '‘’'
             out.append(run(q[0],b,i,False,sz)+inlines_to_runs(n['c'][1],b,i,sup,sz)+run(q[1],b,i,False,sz))
-        elif t in ('Cite','Link'): out.append(inlines_to_runs(n['c'][1], b, i, sup, sz))
+        elif t == 'Cite':
+            cr = cite_runs(n['c'][0], b, i, sz)          # 数字上标引用(回退：无映射时取原文内容)
+            out.append(cr if cr else inlines_to_runs(n['c'][1], b, i, sup, sz))
+        elif t == 'Link': out.append(inlines_to_runs(n['c'][1], b, i, sup, sz))
         elif t == 'Math': out.append(run(math_to_unicode(n['c'][1]), b, i, sup, sz))
         elif t == 'RawInline': pass
         elif t == 'Note': pass
@@ -110,11 +135,12 @@ def plain_text(ils):
             out.append(plain_text(x['c']))
     return ''.join(out)
 
-def caption_runs(kind, n, cap_inlines, sz=18):
-    """统一题注：去掉 caption 里已有的 'Table N.'/'Figure N.' 前缀，加粗标签前缀 + 描述。"""
+def caption_runs(kind, label, cap_inlines, sz=18):
+    """统一题注：剥掉 caption 自带的 'Table N.'/'Table S1.' 前缀(含 S 编号，消双前缀)，
+    用传入 label(主体为数字、补充材料为 'S1'…)重排为加粗标签前缀 + 描述。"""
     txt = plain_text(cap_inlines)
-    txt = re.sub(rf'^\s*{kind}\s*\d+[.:]?\s*', '', txt, flags=re.I)
-    return run(f'{kind} {n}. ', b=True, sz=sz) + run(txt, sz=sz)
+    txt = re.sub(rf'^\s*{kind}\s*S?\d+[.:]?\s*', '', txt, flags=re.I)
+    return run(f'{kind} {label}. ', b=True, sz=sz) + run(txt, sz=sz)
 
 def latex_clean(s):
     s = re.sub(r'\\url\{([^}]*)\}', r'\1', s)
@@ -125,12 +151,13 @@ def latex_clean(s):
     return re.sub(r'\s+',' ', s).strip()
 
 def parse_bibitems(path):
-    """从 thebibliography/.bbl 自解析 \\bibitem 为有序文献列表(LaTeX 清理后纯文本)。"""
+    """从 thebibliography/.bbl 解析 \\bibitem 为有序 [(key, 纯文本)]；key 供正文上标引用编号。"""
     c = open(path, encoding='utf-8').read()
     m = re.search(r'\\begin\{thebibliography\}(?:\{[^}]*\})?(.*?)\\end\{thebibliography\}', c, re.S)
     body = m.group(1) if m else c
-    parts = re.split(r'\\bibitem(?:\[[^\]]*\])?\{[^}]*\}', body)
-    return [latex_clean(p) for p in parts[1:] if latex_clean(p)]
+    keys = re.findall(r'\\bibitem(?:\[[^\]]*\])?\{([^}]*)\}', body)
+    texts = [latex_clean(p) for p in re.split(r'\\bibitem(?:\[[^\]]*\])?\{[^}]*\}', body)[1:]]
+    return [(k, t) for k, t in zip(keys, texts) if t]
 
 # ───────────────────────── frontmatter 抽取 ─────────────────────────
 def extract_braced(s, pos):
@@ -245,7 +272,10 @@ def render_table(tbl, mincols):
     def cell_xml(text, bold, first):
         jc = 'both' if first else 'center'
         r = run(text, b=bold, sz=18)
-        ppr = f'<w:pPr><w:pStyle w:val="Normal"/><w:jc w:val="{jc}"/></w:pPr>'
+        # 单元格段落：单倍行距 line=240、无段前后距(真值表格不继承 Normal 的 278/160)
+        ppr = (f'<w:pPr><w:pStyle w:val="Normal"/>'
+               f'<w:spacing w:lineRule="auto" w:line="240" w:before="0" w:after="0"/>'
+               f'<w:jc w:val="{jc}"/></w:pPr>')
         tcpr = f'<w:tcPr>{border}<w:vAlign w:val="center"/></w:tcPr>'
         return f'<w:tc>{tcpr}<w:p>{ppr}{r}</w:p></w:tc>'
     def cell_text(blocks):
@@ -264,9 +294,11 @@ def render_table(tbl, mincols):
     for r in data_rows:
         rows_xml.append(row_xml(row_cells(r), bold=False))
     grid = ''.join('<w:gridCol/>' for _ in range(ncols))
+    cellmar = ('<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:start w:w="108" w:type="dxa"/>'
+               '<w:bottom w:w="0" w:type="dxa"/><w:end w:w="108" w:type="dxa"/></w:tblCellMar>')
     tbl_xml = (f'<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:jc w:val="center"/>'
-               f'<w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>{grid}</w:tblGrid>'
-               f'{"".join(rows_xml)}</w:tbl>')
+               f'<w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/>{cellmar}</w:tblPr>'
+               f'<w:tblGrid>{grid}</w:tblGrid>{"".join(rows_xml)}</w:tbl>')
     is_wide = ncols >= mincols
     return tbl_xml, is_wide
 
@@ -283,6 +315,10 @@ class Ctx:
     def __init__(s, resource_paths, mincols, pkg):
         s.rp = resource_paths; s.mincols = mincols; s.pkg = pkg
         s.fig_n = 0; s.tab_n = 0; s.rels = []; s.media = []; s.next_rid = 1000; s.in_refs = False; s.ref_n = 0
+        s.supp = False          # 进入补充材料后：图/表改用 S 编号
+        s.s_fig_n = 0; s.s_tab_n = 0; s.draw_n = 0   # S 计数器 + 图形对象唯一 id 计数(与题注号解耦)
+        s.in_ric = False        # Research in context 区(用 address 样式拆分标题/正文)
+        s.supp_idx = None       # 参考文献插入点(首个 Supplementary 大节之前)
 
 def add_image(ctx, path):
     ext = os.path.splitext(path)[1].lower().lstrip('.') or 'png'
@@ -295,7 +331,9 @@ def add_image(ctx, path):
 
 def figure_xml(ctx, src, caption_blocks):
     path = find_image(src, ctx.rp)
-    ctx.fig_n += 1
+    if ctx.supp: ctx.s_fig_n += 1; label = f'S{ctx.s_fig_n}'    # 补充材料：Figure S1, S2…
+    else: ctx.fig_n += 1; label = ctx.fig_n
+    ctx.draw_n += 1; did = ctx.draw_n                           # 图形对象 id(全局唯一，避免主/补冲突)
     out = []
     if path:
         w,h = image_size_px(path)
@@ -304,25 +342,30 @@ def figure_xml(ctx, src, caption_blocks):
         rid = add_image(ctx, path)
         drawing = (f'<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0" '
             f'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
-            f'<wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{ctx.fig_n}" name="Figure {ctx.fig_n}"/>'
+            f'<wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{did}" name="Figure {label}"/>'
             f'<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
             f'<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
             f'<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
-            f'<pic:nvPicPr><pic:cNvPr id="{ctx.fig_n}" name="Figure {ctx.fig_n}"/><pic:cNvPicPr/></pic:nvPicPr>'
+            f'<pic:nvPicPr><pic:cNvPr id="{did}" name="Figure {label}"/><pic:cNvPicPr/></pic:nvPicPr>'
             f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
             f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
             f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>')
         out.append(f'<w:p><w:pPr><w:pStyle w:val="Normal"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr>{TNR}</w:rPr>{drawing}</w:r></w:p>')
     else:
         out.append(para(run(f'[缺图: {src} — 未在 resource-path 找到]', i=True), jc='center'))
-    out.append(para(caption_runs('Figure', ctx.fig_n, caption_blocks), jc='both', before=0, after=120))
+    out.append(para(caption_runs('Figure', label, caption_blocks), jc='both', before=0, after=120, line=240))
     return ''.join(out)
 
+def footnote_para(text):
+    """表脚注：9pt、iCs(不斜)、两端对齐、before=0 after=120(真值表下注样式)。"""
+    return para(run(text, sz=18, ics=True), jc='both', before=0, after=120)
+
 def table_block(ctx, tbl):
-    ctx.tab_n += 1
+    if ctx.supp: ctx.s_tab_n += 1; label = f'S{ctx.s_tab_n}'    # 补充材料：Table S1, S2…
+    else: ctx.tab_n += 1; label = ctx.tab_n
     cap_blocks = tbl['c'][1][1]
     cap_inlines = cap_blocks[0]['c'] if cap_blocks else []
-    cap_p = para(caption_runs('Table', ctx.tab_n, cap_inlines), jc='both', before=120, after=160)
+    cap_p = para(caption_runs('Table', label, cap_inlines), jc='both', before=120, after=160, line=360)
     tbl_xml, is_wide = render_table(tbl, ctx.mincols)
     if is_wide:
         # 宽表→独占横向节：前段结束纵向节，表后段定义横向节
@@ -340,18 +383,24 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True):
             if lvl == 1:
                 ctx.in_refs = key in ('references','bibliography','reference list')
                 if ctx.in_refs: ctx.ref_n = 0
+                ctx.in_ric = (key == 'research in context')
+                if key.startswith('supplementary'):
+                    if ctx.supp_idx is None: ctx.supp_idx = len(out)  # 参考文献插入点：补充材料之前
+                    ctx.supp = True                                   # 此后图/表改用 S 编号
                 no_lead = not lead_break and not seen_h1   # 片段模式：首个大节不插前导分页符
                 seen_h1 = True
                 if section_breaks and key not in NO_BREAK and not no_lead:
                     out.append(pagebreak()); out.append(h1(plain))
                 else:
-                    out.append(h1(plain, before=None if no_lead else 480))
+                    out.append(h1(plain))   # run-on 标题 before=0(靠前段 after=160 分隔)，真值不用 480
             else:
                 out.append(h2(plain))
         elif t in ('Para','Plain'):
             imgs = [n for n in b['c'] if n.get('t')=='Image']
             if len(b['c'])==1 and imgs:
                 out.append(figure_xml(ctx, imgs[0]['c'][2][0], imgs[0]['c'][1]))
+            elif NOTE_SENTINEL in plain_text(b['c'])[:32]:
+                out.append(footnote_para(plain_text(b['c']).replace(NOTE_SENTINEL, '').strip()))  # 表脚注(9pt iCs)
             elif ctx.in_refs:
                 # References：左对齐(jc=start)、自动重编号(去掉 pandoc 残留的开头编号/点)
                 ctx.ref_n += 1
@@ -361,6 +410,12 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True):
                     if x.get('t') == 'Str': x['c'] = re.sub(r'^\s*\d*\.?\s*', '', x['c'])
                     break
                 out.append(para(run(f'{ctx.ref_n}. ') + inlines_to_runs(ils), jc='start'))
+            elif ctx.in_ric and b['c'] and b['c'][0].get('t') == 'Strong':
+                # Research in context：粗体小标题 + 正文各成一段(address 样式、before=156、正文 1.5x)
+                lead = b['c'][0]['c']; rest = b['c'][1:]
+                while rest and rest[0].get('t') in ('Space','SoftBreak'): rest = rest[1:]
+                out.append(para(inlines_to_runs(lead, b=True), style='address', jc='both', before=156, after=0))
+                out.append(para(inlines_to_runs(rest), style='address', jc='both', before=156, after=0, line=360))
             else:
                 out.append(para(inlines_to_runs(b['c']), jc='both'))
         elif t == 'Figure':
@@ -385,15 +440,17 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True):
             for it in items:
                 out.append(para(inlines_to_runs(it[0]['c']) if it and it[0].get('t') in ('Plain','Para') else '', jc='both'))
 
-def render_references(items, out):
-    # 参考文献：左对齐(jc=start，与正文 both 不同)、无缩进、11pt、手打编号。
-    out.append(pagebreak()); out.append(h1('References'))
-    for i, txt in enumerate(items, 1):
-        out.append(para(run(f'{i}. {txt}'), jc='start'))
+def references_block(items):
+    # 参考文献块：分页符 + 'References' 标题 + 各条(左对齐 jc=start、无缩进、11pt、手打编号)。
+    blk = [pagebreak(), h1('References')]
+    for i, it in enumerate(items, 1):
+        txt = it[1] if isinstance(it, tuple) else it      # items 可能是 (key,text) 或纯文本
+        blk.append(para(run(f'{i}. {txt}'), jc='start'))
+    return blk
 
 # ───────────────────────── title page ─────────────────────────
 def title_page(title, authors, affs, keywords, abstract_blocks):
-    out = [para(run(title, b=True, sz=28), jc=None)]
+    out = [para(run(title, b=True, sz=28, szcs=32), jc=None)]
     if authors:
         aff_ids = list(affs.keys()) or sorted({a for au in authors for a in au['affs']})
         letter = {aid: chr(ord('a')+i) for i,aid in enumerate(aff_ids)}
@@ -433,16 +490,84 @@ def title_page(title, authors, affs, keywords, abstract_blocks):
     return out
 
 # ───────────────────────── 打包 ─────────────────────────
+def _strip_resizebox(s):
+    r"""去掉 \resizebox{w}{h}{<tabular>} 缩放包裹，保留内部表体(否则 pandoc 解析不到表)。"""
+    out = []; i = 0
+    while True:
+        m = re.search(r'\\resizebox\s*\*?\s*', s[i:])
+        if not m: out.append(s[i:]); break
+        j = i + m.start(); out.append(s[i:j]); k = j + len(m.group(0))
+        for _ in range(2):                       # 跳过 {width}{height} 两个参数组
+            while k < len(s) and s[k] != '{': k += 1
+            _, k = extract_braced(s, k)
+        while k < len(s) and s[k] != '{': k += 1
+        inner, k = extract_braced(s, k)          # 第三组 = 表体，解包
+        out.append(inner); i = k
+    return ''.join(out)
+
+def _expand_multicolumn(s):
+    r"""\multicolumn{N}{align}{内容} → 内容 + (N-1) 个空单元格(& )。
+    pandoc 常把整行 \multicolumn 分类小标题整体丢弃，展开后能在首列保留文字(对齐真值)。"""
+    out = []; i = 0
+    while True:
+        m = re.search(r'\\multicolumn\s*\{(\d+)\}\s*', s[i:])
+        if not m: out.append(s[i:]); break
+        n = int(m.group(1)); j = i + m.start(); out.append(s[i:j]); k = i + m.end()
+        while k < len(s) and s[k] != '{': k += 1   # 跳过 {align}
+        _, k = extract_braced(s, k)
+        while k < len(s) and s[k] != '{': k += 1   # {内容}
+        content, k = extract_braced(s, k)
+        out.append(content + ' &'*(n-1)); i = k
+    return ''.join(out)
+
 def preprocess_latex(tex):
-    """array/tabularx 自定义列类型 L/R/C{宽} → p{宽}，让 pandoc 能解析这类表格。"""
-    return re.sub(r'(?<![\\A-Za-z])[LRC]\{([^{}]*(?:cm|mm|pt|in|em|\\linewidth|\\textwidth|\\columnwidth)[^{}]*)\}',
-                  r'p{\1}', tex)
+    r"""让 pandoc 能解析更多表：① L/R/C{宽}→p{宽}；② sidewaystable→table；③ 去 \resizebox 包裹；
+    ④ 展开 \multicolumn(否则整行分类小标题被 pandoc 丢弃)。
+    (宽表的横向页由引擎按列数自行判定，故丢掉 rotating 的 sideways 方向不影响排版。)"""
+    tex = re.sub(r'(?<![\\A-Za-z])[LRC]\{([^{}]*(?:cm|mm|pt|in|em|\\linewidth|\\textwidth|\\columnwidth)[^{}]*)\}',
+                 r'p{\1}', tex)
+    tex = re.sub(r'\\begin\{sidewaystable\}(\[[^\]]*\])?', r'\\begin{table}', tex)
+    tex = tex.replace(r'\end{sidewaystable}', r'\end{table}')
+    tex = _strip_resizebox(tex)
+    tex = _expand_multicolumn(tex)
+    tex = re.sub(r'\\(?:scriptsize|footnotesize)\s?', NOTE_SENTINEL, tex)  # 表脚注标记(渲染为 9pt)
+    return tex
+
+def _find_input(target, base_dir, resource_paths):
+    cands = [target] if target.lower().endswith(('.tex','.ltx')) else [target, target+'.tex']
+    for d in [base_dir] + list(resource_paths):
+        for c in cands:
+            p = c if os.path.isabs(c) else os.path.join(d, c)
+            if os.path.isfile(p): return p
+    bn = os.path.basename(cands[-1])                 # 回退：按 basename 在 resource-path 子树里找(容错作者写错的相对子目录)
+    for d in resource_paths:
+        for root,_,files in os.walk(d):
+            if bn in files:
+                hit = os.path.join(root, bn)
+                sys.stderr.write(f'[subfmt] \\input{{{target}}} 未按原路径找到，改用 {hit}\n')
+                return hit
+    return None
+
+def inline_inputs(tex, base_dir, resource_paths, depth=0):
+    r"""递归内联 \input{file}，使 preprocess_latex 能作用到被包含的表文件
+    (否则 sideways/resizebox 在 \input 的子文件里漏改、宽表全丢)。文献库(thebibliography)
+    不内联，交给 pandoc / --bibliography，避免重复。"""
+    if depth > 15: return tex
+    def repl(m):
+        p = _find_input(m.group(1).strip(), base_dir, resource_paths)
+        if not p: return m.group(0)
+        content = open(p, encoding='utf-8').read()
+        if r'\begin{thebibliography}' in content: return m.group(0)
+        return inline_inputs(content, os.path.dirname(p), resource_paths, depth+1)
+    return re.sub(r'\\input\s*\{([^}]*)\}', repl, tex)
 
 def run_pandoc_json(path, resource_paths):
     tmp = None; cmd_path = path
     if path.lower().endswith('.tex'):
-        tex = preprocess_latex(open(path, encoding='utf-8').read())
-        tmp = os.path.join(os.path.dirname(os.path.abspath(path)), '._subfmt_pre.tex')  # 同目录保 \input 基准
+        base = os.path.dirname(os.path.abspath(path))
+        tex = inline_inputs(open(path, encoding='utf-8').read(), base, resource_paths)
+        tex = preprocess_latex(tex)
+        tmp = os.path.join(base, '._subfmt_pre.tex')  # 同目录保剩余 \input/图片基准
         open(tmp, 'w', encoding='utf-8').write(tex); cmd_path = tmp
     cmd = ['pandoc', cmd_path, '-t', 'json']
     if resource_paths: cmd += ['--resource-path', os.pathsep.join(resource_paths)]
@@ -485,15 +610,23 @@ def main():
     with zipfile.ZipFile(a.styles) as z: z.extractall(pkg)
     ctx = Ctx(rp, a.landscape_mincols, pkg)
 
-    body = [] if a.body_only else title_page(title, authors, affs, keywords, abstract)
-    render_blocks(ast['blocks'], body, ctx, lead_break=not a.body_only)
+    # 参考文献须在渲染正文前解析：① 建 cite key→编号映射(供正文上标引用) ② 决定插入位置
+    items = None
     if a.bibliography:
+        _CITE_KEY2NUM.clear()
         if a.bibliography.lower().endswith(('.tex','.bbl')):
-            items = parse_bibitems(a.bibliography)
+            items = parse_bibitems(a.bibliography)                          # [(key, text)]
+            _CITE_KEY2NUM.update({k: i for i, (k, _) in enumerate(items, 1)})
         else:
             refs = run_pandoc_json(a.bibliography, rp)
             items = [plain_text(b['c']) for b in refs['blocks'] if b.get('t') in ('Para','Plain')]
-        render_references(items, body)
+
+    body = [] if a.body_only else title_page(title, authors, affs, keywords, abstract)
+    render_blocks(ast['blocks'], body, ctx, lead_break=not a.body_only)
+    if items:
+        # 参考文献排在首个 Supplementary 大节之前(真值顺序)；无补充材料则置于文末
+        idx = ctx.supp_idx if ctx.supp_idx is not None else len(body)
+        body[idx:idx] = references_block(items)
 
     # 写图 media + rels + content types
     os.makedirs(f'{pkg}/word/media', exist_ok=True)
@@ -514,9 +647,10 @@ def main():
           'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"')
     document = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document {ns}>'
                 f'<w:body>{"".join(body)}<w:sectPr>{PORTRAIT_SECT}</w:sectPr></w:body></w:document>')
+    document = document.replace(NOTE_SENTINEL, '')   # 兜底：清除任何残留脚注哨兵
     open(f'{pkg}/word/document.xml','w',encoding='utf-8').write(document)
     repack(pkg, a.output)
-    print(f"[ok] {a.output}  (authors={len(authors)}, figs={ctx.fig_n}, tables={ctx.tab_n})")
+    print(f"[ok] {a.output}  (authors={len(authors)}, figs={ctx.fig_n+ctx.s_fig_n}, tables={ctx.tab_n+ctx.s_tab_n})")
 
 if __name__ == '__main__':
     main()

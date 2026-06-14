@@ -34,7 +34,7 @@
 ### 1.1 Title page 标题页（document.xml 行 3–428）
 
 **① 主标题**：14pt（sz=28/szCs=32）粗体（b/bCs）；**左对齐 start**（无本地 jc，继承 Normal）；`pStyle=Normal`；TNR + 宋体。
-**② 作者行**（`pStyle=author`）：单段含全部作者 "First Author^a, Second Author^a, …, Corresp Author A^a,*, Corresp Author B^a,**"（示例占位）。**不斜体**（author 样式带 `<w:i/>` 但 run 未含、`*` run 显式 `<w:i w:val="false"/>`）；单位字母 `a` 为 `vertAlign=superscript`；通讯 `*`/`**` 上标；11pt（本地 sz=22 覆写 author 默认 12pt）；`jc=both`；`spacing before=0 after=156`。
+**② 作者行**（`pStyle=author`）：单段含全部作者 "First Author^a, Second Author^a, …, Corresp Author A^a,*, Corresp Author B^a,**"（示例占位）。**斜体**（作者名继承 author 样式的 `<w:i/>`，渲染为斜体——经真值 PDF 实测确认，run 不取消斜体；此前规格误记为"不斜体"，已更正）；单位字母 `a` 为 `vertAlign=superscript`；通讯 `*`/`**` 上标；11pt（本地 sz=22 覆写 author 默认 12pt）；`jc=both`；`spacing before=0 after=156`。
 **③ 单位行**（`pStyle=address`）：**自动编号** `numPr numId=1 ilvl=0` → `numFmt=lowerLetter`、`lvlText="%1."` 即 **"a."**；`ind start=360 hanging=360`；11pt；`jc=both`。
 **④ 通讯作者邮箱行 ×2**（`pStyle=address`，`jc=both`，`spacing before=156 after=0`，11pt）。
 **⑤ 收尾分页符**：空 Normal 段（rPr 带 sz=28 b）内含 `<w:br w:type="page"/>`（行 426）。
@@ -57,7 +57,7 @@
 ### 1.3 正文段落与标题机制
 
 - **正文段**：`pStyle=Normal` + `jc=both` + run 直接 TNR（宋体）；无 spacing/sz 覆盖 → 1.16x、11pt 全继承 Normal。
-- **大节标题**：`pStyle=Normal` + 直接 `<w:b/>` + 直接 `sz=28`（14pt） + `jc=both`；首个 before=0 after=160，后续大节 before≈480；TNR。清单：主标题、Introduction / Methods / Results / Discussion / Conclusion / Contributors / Data sharing statement / Declaration of interests / Acknowledgements / References / Supplementary Material / Research in context / Summary。
+- **大节标题**：`pStyle=Normal` + 直接 `<w:b/>` + 直接 `sz=28`（14pt，`szCs=32`） + `jc=both`；`after=160`、**`before=0`（真值全文 `before=480` 出现 0 次——此前规格的"后续大节 before≈480"系误记，已更正：大节靠分页符或前段 after=160 分隔，run-on 声明段标题亦 before=0）**；TNR。清单：主标题、Introduction / Methods / Results / Discussion / Conclusion / Contributors / Data sharing statement / Declaration of interests / Acknowledgements / References / Supplementary Material / Research in context / Summary。
 - **小节标题**（如 "Study Design and Population"）：`pStyle=Normal` + 直接 `<w:b/>` + **无 sz 覆盖（11pt）** + `jc=both` + **无 spacing 覆盖** → 与正文同字号同行距，**仅靠加粗区分、不加段前距**。
 - **Research in context 区**（例外用 address 样式）：主标题=一级标题格式；3 小节标题=`address`+b+11pt+jc=both+before=156 after=0；3 正文段=`address`+不粗+11pt+jc=both+before=156 after=0+行距 line=360(1.5x)。
 - **四声明段**（Contributors / Data sharing / Declaration of interests / Acknowledgements）：标题=一级标题格式；正文=Normal+11pt+jc=both+TNR；**四段连排同一页**（彼此无分页符，紧跟 Conclusion 后）。
@@ -93,6 +93,7 @@
 
 **表格（全框线网格表，非三线表）**：
 - 每单元格 **四边 `single sz=4 color=000000`**；单元格统一 **9pt**（sz=18）；首列 jc=both（左）、数据列 jc=center；cell vAlign=center。
+- **单元格段落 spacing `lineRule=auto line=240 before=0 after=0`**（单倍行距、无段距——不可继承 Normal 的 278/160，否则行高过松；引擎在 `cell_xml` 显式写出）。
 - 表块 `tblPr jc=center` + `tblLayout=fixed` + `tblCellMar top/bottom=0 start/end=108`。
 - 表宽：多数 `tblW 5000 pct`（满宽）；Table 3 用 `13921 dxa`（配横向页）。
 - **表头加粗是通则**（Table 2/3/4 及全部 S 表），**唯独 Table 1 表头不加粗（唯一例外）**。
@@ -103,6 +104,15 @@
 - **表脚注在表下方**，9pt，带 iCs，jc=both，before=0 after=120。
 
 **横向页**：宽表 Table 2/3/4 放横向 A4（`sectPr orient=landscape 16838×11906`，margin left/right=1080）；其余与补充材料为纵向 A4。全文 6 个 sectPr（2 横 + 4 纵），每个带 docGrid linePitch=312。
+（注：横向页由引擎按"列数 ≥ `--landscape-mincols`（默认 6）"判定，故 landscape 节数随实际宽表数量变化，与真值的"2 横"不必相等——真值是更早的数据版本、宽表更少。）
+
+### 1.7 正文引用 / 补充材料编号 / 参考文献位置（引擎行为，2026-06 校正补充）
+
+- **正文引用 = 上标编号**：`\cite{key}` 渲染为上标 run（仅 `vertAlign=superscript` + TNR、**无 sz 覆盖**，继承 11pt）。编号 = 该 key 在 `--bibliography`（`\bibitem` 顺序）中的 1-based 序号。多 key 排序后**连续段用连字符**（`2-3`、`5-7`）、**跳号用逗号无空格**（`7,9`），可组合（`5-6,24-25`）。与标题页的单位字母上标（带 `sz=22`）区分。
+- **补充材料 S 编号**：进入首个以 "Supplementary" 开头的大节后，图/表切到 **`Table S1…`/`Figure S1…`**（独立 S 计数器），并剥除 caption 自带的 `Table N./Table S1.` 前缀（消双前缀）。
+- **参考文献位置**：`--bibliography` 生成的 References 块（分页符 + 14pt 标题 + 左对齐 `jc=start` 编号条目）插在**首个 Supplementary 大节之前**（真值顺序：…Acknowledgements → References → Supplementary…）；无补充材料时置于文末。
+- **LaTeX 预处理（让 pandoc 能解析）**：`\input` 先**递归内联**（否则被包含文件里的 sideways/resizebox 漏改、宽表全丢；文献库 thebibliography 不内联）→ `sidewaystable→table` + 去 `\resizebox{}{}{}` 包裹 + 展开 `\multicolumn`（否则整行分类小标题被 pandoc 丢弃）+ `L/R/C{宽}→p{宽}`。`\input` 找不到原路径时按 basename 在 `--resource-path` 子树里兜底搜索。
+- **表脚注识别**：`\scriptsize`/`\footnotesize` 预处理期换成哨兵 → 段首带哨兵的段落判为表脚注，渲染为 9pt iCs（见 1.6）。
 
 ---
 
