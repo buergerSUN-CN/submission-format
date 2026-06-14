@@ -416,7 +416,7 @@ def table_block(ctx, tbl):
     else: ctx.tab_n += 1; label = ctx.tab_n
     cap_blocks = tbl['c'][1][1]
     cap_inlines = cap_blocks[0]['c'] if cap_blocks else []
-    cap_p = para(caption_runs('Table', label, cap_inlines), jc='both', before=120, after=160, line=360)
+    cap_p = para(caption_runs('Table', label, cap_inlines), jc='both', before=120, after=160, line=240)
     tbl_xml, is_wide = render_table(tbl, ctx.mincols, ctx.landscape_fit)
     # 只返回 题注+表(不含分节段)；横向分节由 render_blocks 处理，
     # 以便把紧随的表脚注一并圈进横向节(否则脚注被挤到下一页)。

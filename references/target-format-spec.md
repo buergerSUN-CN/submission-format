@@ -99,7 +99,7 @@
 - **表头加粗是通则**（Table 2/3/4 及全部 S 表），**唯独 Table 1 表头不加粗（唯一例外）**。
 
 **题注**：
-- **表标题在表【上方】**，"Table N. " 标签加粗（b+sz=18）+ 描述非粗（sz=18），jc=both，spacing line=360 before=120 after=160。
+- **表标题在表【上方】**，"Table N. " 标签加粗（b+sz=18）+ 描述非粗（sz=18），jc=both，spacing before=120 after=160；行距 **line=240（单倍，按用户偏好）**——真值原为 line=360(1.5x)，引擎已按用户要求改 1.0。
 - **图标题在图【下方】**，"Figure N. " 标签加粗（b+sz=18）+ 描述非粗，jc=both，spacing line=240 before=0 after=120；图所在段 jc=center。
 - **表脚注在表下方**，9pt，带 iCs，jc=both，before=0 after=120。
 
