@@ -30,6 +30,8 @@ LANDSCAPE_SECT = ('<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>'
                   '<w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/>')
 CONTENT_W_PORTRAIT = (11906 - 2*1800) * 635   # EMU
 CONTENT_W_LANDSCAPE = (16838 - 2*1440) * 635
+TBL_DXA_PORTRAIT = 11906 - 2*1800    # 8306  纵向表可用宽(dxa)
+TBL_DXA_LANDSCAPE = 16838 - 2*1440   # 13958 横向表可用宽(dxa)
 
 def esc(s):
     return s.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
@@ -254,52 +256,67 @@ def cells_text(row):  # row: list of cells; cell c = [attr, rowspan?, ... , bloc
         out.append(txt)
     return out
 
+def _col_widths(col_chars, total, char_dxa=95, pad=216, minw=360):
+    """按各列最长单元格的字符数(内容自然宽)成比例分配列宽，使表尽量不换行→整体高度最短。
+    - 自然宽合计 <= 可用宽：等比放大，每列 ≥ 自然宽 → 全不换行(高度最小)。
+    - 合计 > 可用宽：等比压缩(带列下限) → 把换行摊匀、总高最小化。
+    列宽合计 == total。"""
+    nat = [max(1, c)*char_dxa + pad for c in col_chars]
+    s = sum(nat) or 1
+    w = [max(minw, n*total//s) for n in nat]
+    diff = total - sum(w)                 # 取整/下限造成的差额
+    if w:
+        k = w.index(max(w)); w[k] = max(minw, w[k] + diff)   # 摊到最宽列
+    return w
+
 def render_table(tbl, mincols):
     # tbl c = [attr, caption, colspec, head, bodies, foot]
     colspec = tbl['c'][2]; ncols = len(colspec)
     head = tbl['c'][3]; bodies = tbl['c'][4]
-    def rows_of(body_rows):
-        return [r['c'][1] if isinstance(r,dict) else r[1] for r in body_rows]
     head_rows = head[1] if head else []
     data_rows = []
     for body in bodies:
         data_rows += body[3]  # body = [attr, rowhdrcols, head, body]
     def row_cells(r):
-        cells = r[1] if isinstance(r,list) else r['c'][1]
-        return cells
+        return r[1] if isinstance(r,list) else r['c'][1]
+    def cell_text(blocks):
+        return ' '.join(plain_text(bl['c']) for bl in blocks if bl.get('t') in ('Plain','Para'))
+    def row_texts(r):
+        return [cell_text(_cell_blocks(c)) for c in row_cells(r)]
+    head_txt = [row_texts(r) for r in head_rows]
+    data_txt = [row_texts(r) for r in data_rows]
+    # longtable 表头常在 body 重复，去重首行
+    if head_txt and data_txt and head_txt[-1] == data_txt[0]:
+        data_txt = data_txt[1:]
+    # 按内容分配列宽：col_chars[j] = 第 j 列最长单元格字符数(代理自然宽)
+    is_wide = ncols >= mincols
+    total = TBL_DXA_LANDSCAPE if is_wide else TBL_DXA_PORTRAIT
+    col_chars = [1]*ncols
+    for row in head_txt + data_txt:
+        for j in range(min(ncols, len(row))):
+            col_chars[j] = max(col_chars[j], len(row[j]))
+    widths = _col_widths(col_chars, total)
     # 全框线 9pt 表
     border = '<w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:start w:val="single" w:sz="4" w:color="000000"/><w:end w:val="single" w:sz="4" w:color="000000"/></w:tcBorders>'
-    def cell_xml(text, bold, first):
-        jc = 'both' if first else 'center'
+    def cell_xml(text, bold, j):
+        jc = 'both' if j==0 else 'center'
         r = run(text, b=bold, sz=18)
         # 单元格段落：单倍行距 line=240、无段前后距(真值表格不继承 Normal 的 278/160)
         ppr = (f'<w:pPr><w:pStyle w:val="Normal"/>'
                f'<w:spacing w:lineRule="auto" w:line="240" w:before="0" w:after="0"/>'
                f'<w:jc w:val="{jc}"/></w:pPr>')
-        tcpr = f'<w:tcPr>{border}<w:vAlign w:val="center"/></w:tcPr>'
+        tcpr = f'<w:tcPr><w:tcW w:w="{widths[j]}" w:type="dxa"/>{border}<w:vAlign w:val="center"/></w:tcPr>'
         return f'<w:tc>{tcpr}<w:p>{ppr}{r}</w:p></w:tc>'
-    def cell_text(blocks):
-        return ' '.join(plain_text(bl['c']) for bl in blocks if bl.get('t') in ('Plain','Para'))
-    def row_xml(cells, bold):
-        tcs = ''.join(cell_xml(cell_text(_cell_blocks(c)), bold, j==0) for j,c in enumerate(cells))
+    def row_xml(txts, bold):
+        tcs = ''.join(cell_xml(txts[j] if j<len(txts) else '', bold, j) for j in range(ncols))
         return f'<w:tr>{tcs}</w:tr>'
-    # longtable 表头常在 body 重复，去重首行
-    if head_rows and data_rows:
-        h = [cell_text(_cell_blocks(c)) for c in row_cells(head_rows[-1])]
-        d = [cell_text(_cell_blocks(c)) for c in row_cells(data_rows[0])]
-        if h == d: data_rows = data_rows[1:]
-    rows_xml = []
-    for r in head_rows:
-        rows_xml.append(row_xml(row_cells(r), bold=True))
-    for r in data_rows:
-        rows_xml.append(row_xml(row_cells(r), bold=False))
-    grid = ''.join('<w:gridCol/>' for _ in range(ncols))
+    rows_xml = [row_xml(r, True) for r in head_txt] + [row_xml(r, False) for r in data_txt]
+    grid = ''.join(f'<w:gridCol w:w="{w}"/>' for w in widths)
     cellmar = ('<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:start w:w="108" w:type="dxa"/>'
                '<w:bottom w:w="0" w:type="dxa"/><w:end w:w="108" w:type="dxa"/></w:tblCellMar>')
-    tbl_xml = (f'<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:jc w:val="center"/>'
+    tbl_xml = (f'<w:tbl><w:tblPr><w:tblW w:w="{total}" w:type="dxa"/><w:jc w:val="center"/>'
                f'<w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/>{cellmar}</w:tblPr>'
                f'<w:tblGrid>{grid}</w:tblGrid>{"".join(rows_xml)}</w:tbl>')
-    is_wide = ncols >= mincols
     return tbl_xml, is_wide
 
 def _cell_blocks(cell):
@@ -319,6 +336,7 @@ class Ctx:
         s.s_fig_n = 0; s.s_tab_n = 0; s.draw_n = 0   # S 计数器 + 图形对象唯一 id 计数(与题注号解耦)
         s.in_ric = False        # Research in context 区(用 address 样式拆分标题/正文)
         s.supp_idx = None       # 参考文献插入点(首个 Supplementary 大节之前)
+        s.landscape_close = None  # 横向表后待收尾的 LANDSCAPE 分节段(跨 Div 递归共享，故放 ctx)
 
 def add_image(ctx, path):
     ext = os.path.splitext(path)[1].lower().lstrip('.') or 'png'
@@ -367,17 +385,23 @@ def table_block(ctx, tbl):
     cap_inlines = cap_blocks[0]['c'] if cap_blocks else []
     cap_p = para(caption_runs('Table', label, cap_inlines), jc='both', before=120, after=160, line=360)
     tbl_xml, is_wide = render_table(tbl, ctx.mincols)
-    if is_wide:
-        # 宽表→独占横向节：前段结束纵向节，表后段定义横向节
-        pre = para('', sect=PORTRAIT_SECT)
-        post = para('', sect=LANDSCAPE_SECT)
-        return pre + cap_p + tbl_xml + post
-    return cap_p + tbl_xml
+    # 只返回 题注+表(不含分节段)；横向分节由 render_blocks 处理，
+    # 以便把紧随的表脚注一并圈进横向节(否则脚注被挤到下一页)。
+    return cap_p + tbl_xml, is_wide
 
-def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True):
+def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True, is_top=True):
     seen_h1 = False
     for b in blocks:
         t = b['t']
+        if ctx.landscape_close is not None:
+            # 横向表后：表脚注/空段并入横向节(保持待收尾)，遇到正文内容才收尾横向节
+            if t in ('Para','Plain'):
+                txt = plain_text(b['c'])
+                if NOTE_SENTINEL in txt[:32]:
+                    out.append(footnote_para(txt.replace(NOTE_SENTINEL, '').strip())); continue
+                if not txt.strip() and not any(n.get('t')=='Image' for n in b['c']):
+                    continue
+            out.append(ctx.landscape_close); ctx.landscape_close = None
         if t == 'Header':
             lvl, _, ils = b['c']; plain = plain_text(ils).strip(); key = plain.lower()
             if lvl == 1:
@@ -432,13 +456,21 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True):
             findimg(b['c'][2])
             if img: out.append(figure_xml(ctx, img['c'][2][0], cap_inlines or img['c'][1]))
         elif t == 'Table':
-            out.append(table_block(ctx, b))
+            xml, is_wide = table_block(ctx, b)
+            if is_wide:
+                out.append(para('', sect=PORTRAIT_SECT))             # 收尾前面的纵向节
+                out.append(xml)
+                ctx.landscape_close = para('', sect=LANDSCAPE_SECT)  # 推迟到表脚注(若有)之后再收尾横向节
+            else:
+                out.append(xml)
         elif t == 'Div':
-            render_blocks(b['c'][1], out, ctx, section_breaks)
+            render_blocks(b['c'][1], out, ctx, section_breaks, is_top=False)
         elif t in ('BulletList','OrderedList'):
             items = b['c'] if t=='BulletList' else b['c'][1]
             for it in items:
                 out.append(para(inlines_to_runs(it[0]['c']) if it and it[0].get('t') in ('Plain','Para') else '', jc='both'))
+    if is_top and ctx.landscape_close is not None:    # 文末仍有未收尾的横向节(末表无脚注)
+        out.append(ctx.landscape_close); ctx.landscape_close = None
 
 def references_block(items):
     # 参考文献块：分页符 + 'References' 标题 + 各条(左对齐 jc=start、无缩进、11pt、手打编号)。

@@ -113,6 +113,8 @@
 - **参考文献位置**：`--bibliography` 生成的 References 块（分页符 + 14pt 标题 + 左对齐 `jc=start` 编号条目）插在**首个 Supplementary 大节之前**（真值顺序：…Acknowledgements → References → Supplementary…）；无补充材料时置于文末。
 - **LaTeX 预处理（让 pandoc 能解析）**：`\input` 先**递归内联**（否则被包含文件里的 sideways/resizebox 漏改、宽表全丢；文献库 thebibliography 不内联）→ `sidewaystable→table` + 去 `\resizebox{}{}{}` 包裹 + 展开 `\multicolumn`（否则整行分类小标题被 pandoc 丢弃）+ `L/R/C{宽}→p{宽}`。`\input` 找不到原路径时按 basename 在 `--resource-path` 子树里兜底搜索。
 - **表脚注识别**：`\scriptsize`/`\footnotesize` 预处理期换成哨兵 → 段首带哨兵的段落判为表脚注，渲染为 9pt iCs（见 1.6）。
+- **列宽按内容自动分配**（`render_table`/`_col_widths`）：列宽 ∝ 该列最长单元格字符数（字符宽代理 `char_dxa≈95` + 单元格内边距）；自然宽合计 ≤ 可用宽则等比放大（全列 ≥ 自然宽、不换行），否则等比压缩（带列下限）。目的：尽量不换行、表整体高度最短。`tblW`/`gridCol`/`tcW` 均用 dxa（纵向 8306 / 横向 13958），不再等分。
+- **横向表脚注归位**（`render_blocks` 用 `ctx.landscape_close`）：宽表的 `LANDSCAPE` 收尾分节段**推迟到表脚注之后**插入（脚注/空段并入横向节、遇正文内容才收尾），且该状态放在 `ctx` 上以跨 pandoc 的 `Div` 浮动包裹（`Div[Table]`）递归共享——否则表脚注会被挤到表后的纵向页。
 
 ---
 
