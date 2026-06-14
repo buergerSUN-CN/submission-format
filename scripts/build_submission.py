@@ -323,6 +323,13 @@ def _cell_blocks(cell):
     # pandoc cell = [attr, alignment, rowspan, colspan, blocks]
     return cell[4] if isinstance(cell,list) and len(cell)>=5 else (cell.get('c',[None,None,None,None,[]])[4] if isinstance(cell,dict) else [])
 
+def _is_wide_block(b, mincols):
+    """该块是否为(或包裹着)宽表——pandoc 把浮动表包进 Div[Table]，故需穿透 Div。
+    用于让相邻横向宽表续在同一横向节、避免夹出空白纵向页。"""
+    if b['t'] == 'Table': return len(b['c'][2]) >= mincols   # colspec 长度 = 列数
+    if b['t'] == 'Div': return any(_is_wide_block(k, mincols) for k in b['c'][1])
+    return False
+
 # ───────────────────────── 正文渲染 ─────────────────────────
 NO_BREAK = {'acknowledgements','acknowledgments','author contributions','contributors',
             'conflicts of interest','declaration of interests','competing interests',
@@ -393,15 +400,18 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True, is_top
     seen_h1 = False
     for b in blocks:
         t = b['t']
+        closed_ls = False     # 本块是否刚收尾了横向节(供其后大节省掉多余 pagebreak)
         if ctx.landscape_close is not None:
-            # 横向表后：表脚注/空段并入横向节(保持待收尾)，遇到正文内容才收尾横向节
+            # 横向表后：表脚注/空段并入横向节；相邻横向宽表续在同一横向节；遇正文内容才收尾
             if t in ('Para','Plain'):
                 txt = plain_text(b['c'])
                 if NOTE_SENTINEL in txt[:32]:
                     out.append(footnote_para(txt.replace(NOTE_SENTINEL, '').strip())); continue
                 if not txt.strip() and not any(n.get('t')=='Image' for n in b['c']):
                     continue
-            out.append(ctx.landscape_close); ctx.landscape_close = None
+            if not _is_wide_block(b, ctx.mincols):
+                out.append(ctx.landscape_close); ctx.landscape_close = None; closed_ls = True
+            # 否则：下一块仍是横向宽表 → 不收尾、不另插 pre，续在同一横向节
         if t == 'Header':
             lvl, _, ils = b['c']; plain = plain_text(ils).strip(); key = plain.lower()
             if lvl == 1:
@@ -413,9 +423,10 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True, is_top
                     ctx.supp = True                                   # 此后图/表改用 S 编号
                 no_lead = not lead_break and not seen_h1   # 片段模式：首个大节不插前导分页符
                 seen_h1 = True
-                if section_breaks and key not in NO_BREAK and not no_lead:
+                if section_breaks and key not in NO_BREAK and not no_lead and not closed_ls:
                     out.append(pagebreak()); out.append(h1(plain))
                 else:
+                    # closed_ls：刚收尾横向节(分节符已换页)，不再叠加 pagebreak，免空白页
                     out.append(h1(plain))   # run-on 标题 before=0(靠前段 after=160 分隔)，真值不用 480
             else:
                 out.append(h2(plain))
@@ -438,8 +449,8 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True, is_top
                 # Research in context：粗体小标题 + 正文各成一段(address 样式、before=156、正文 1.5x)
                 lead = b['c'][0]['c']; rest = b['c'][1:]
                 while rest and rest[0].get('t') in ('Space','SoftBreak'): rest = rest[1:]
-                out.append(para(inlines_to_runs(lead, b=True), style='address', jc='both', before=156, after=0))
-                out.append(para(inlines_to_runs(rest), style='address', jc='both', before=156, after=0, line=360))
+                out.append(para(inlines_to_runs(lead, b=True, sz=22), style='address', jc='both', before=156, after=0))
+                out.append(para(inlines_to_runs(rest, sz=22), style='address', jc='both', before=156, after=0, line=360))
             else:
                 out.append(para(inlines_to_runs(b['c']), jc='both'))
         elif t == 'Figure':
@@ -458,9 +469,10 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True, is_top
         elif t == 'Table':
             xml, is_wide = table_block(ctx, b)
             if is_wide:
-                out.append(para('', sect=PORTRAIT_SECT))             # 收尾前面的纵向节
-                out.append(xml)
-                ctx.landscape_close = para('', sect=LANDSCAPE_SECT)  # 推迟到表脚注(若有)之后再收尾横向节
+                if ctx.landscape_close is None:                       # 从纵向进入横向才插 pre
+                    out.append(para('', sect=PORTRAIT_SECT))          # 收尾前面的纵向节
+                out.append(xml)                                       # (已在横向节则直接续上)
+                ctx.landscape_close = para('', sect=LANDSCAPE_SECT)   # 推迟到表脚注(若有)之后再收尾横向节
             else:
                 out.append(xml)
         elif t == 'Div':

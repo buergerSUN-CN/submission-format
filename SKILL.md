@@ -67,7 +67,7 @@ python3 scripts/build_submission.py paper.tex -o paper_submission.docx \
 - 9 处分页(大节前各一)；声明段(Acknowledgements/Contributions/Conflicts/Data availability 等)连排同页。
 - title page：作者合段+上标单位字母+`*/**`通讯+单位 address 自动"a."编号+通讯邮箱行。
 - Summary：4 小标题独立粗体段+正文；Keywords 标签加粗+分号分隔。
-- 表：全框线 sz=4、单元格 9pt(段落 line=240/before0/after0 单倍行距)、首列左/数据列中、表块居中；表头加粗；中点小数(`\cdot`→·)；宽表(≥N 列)横向(横向表的表脚注留在同一横向节内、跟在表后)。
+- 表：全框线 sz=4、单元格 9pt(段落 line=240/before0/after0 单倍行距)、首列左/数据列中、表块居中；表头加粗；中点小数(`\cdot`→·)；宽表(≥N 列)横向(表脚注留同一横向节内跟在表后；相邻横向宽表续在同一横向节、横向表后大节省 pagebreak→无空白页)。
 - 列宽：**按各列最长单元格内容自动分配**(非等分)，使表尽量不换行→整体高度最短；列宽合计=页面可用宽。
 - 题注：表上(line=360)/图下(line=240)，"Table N./Figure N." 加粗 9pt 前缀；表脚注 9pt iCs。
 - 正文引用：`\cite{key}` → 上标编号(按 `--bibliography` 的 `\bibitem` 顺序)，连续段连字符 `2-3`、跳号逗号 `7,9`。
