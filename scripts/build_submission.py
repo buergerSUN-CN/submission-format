@@ -32,6 +32,9 @@ CONTENT_W_PORTRAIT = (11906 - 2*1800) * 635   # EMU
 CONTENT_W_LANDSCAPE = (16838 - 2*1440) * 635
 TBL_DXA_PORTRAIT = 11906 - 2*1800    # 8306  纵向表可用宽(dxa)
 TBL_DXA_LANDSCAPE = 16838 - 2*1440   # 13958 横向表可用宽(dxa)
+CHAR_DXA = 95        # 9pt 单元格每字符宽度估计(dxa)；列宽分配与横/纵判定共用
+CELL_PAD = 216       # 单元格左右内边距合计(start/end=108)
+LANDSCAPE_FIT = 1.6  # 自然总宽 > 纵向可用宽 × 此值 → 转横向(否则压进纵向页)；--landscape-fit 可调
 
 def esc(s):
     return s.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
@@ -256,20 +259,41 @@ def cells_text(row):  # row: list of cells; cell c = [attr, rowspan?, ... , bloc
         out.append(txt)
     return out
 
-def _col_widths(col_chars, total, char_dxa=95, pad=216, minw=360):
-    """按各列最长单元格的字符数(内容自然宽)成比例分配列宽，使表尽量不换行→整体高度最短。
+def _col_nat(col_chars):
+    """各列自然宽(dxa) = 最长单元格字符数 × CHAR_DXA + 单元格内边距。"""
+    return [max(1, c)*CHAR_DXA + CELL_PAD for c in col_chars]
+
+def _col_widths(col_chars, col_word, total):
+    """按各列自然宽成比例分配列宽，使表尽量不换行→整体高度最短。
     - 自然宽合计 <= 可用宽：等比放大，每列 ≥ 自然宽 → 全不换行(高度最小)。
-    - 合计 > 可用宽：等比压缩(带列下限) → 把换行摊匀、总高最小化。
+    - 合计 > 可用宽：等比压缩，但每列不低于其"最长单词宽"(避免把数字/单词折断，如 73→7/3)。
     列宽合计 == total。"""
-    nat = [max(1, c)*char_dxa + pad for c in col_chars]
+    nat = _col_nat(col_chars)
+    mn = [max(480, w*CHAR_DXA + CELL_PAD) for w in col_word]   # 列下限=最长单词不折断
     s = sum(nat) or 1
-    w = [max(minw, n*total//s) for n in nat]
+    w = [max(mn[j], nat[j]*total//s) for j in range(len(nat))]
     diff = total - sum(w)                 # 取整/下限造成的差额
     if w:
-        k = w.index(max(w)); w[k] = max(minw, w[k] + diff)   # 摊到最宽列
+        k = w.index(max(w)); w[k] = max(mn[k], w[k] + diff)   # 摊到最宽列
     return w
 
-def render_table(tbl, mincols):
+def _table_colchars(tbl):
+    """从 pandoc table 块抽取各列最长单元格字符数(用于横/纵判定与列宽分配)。"""
+    ncols = len(tbl['c'][2]); head = tbl['c'][3]; bodies = tbl['c'][4]
+    rows = (head[1] if head else []) + [r for body in bodies for r in body[3]]
+    col = [1]*ncols
+    for rr in rows:
+        cells = rr[1] if isinstance(rr,list) else rr['c'][1]
+        for j,c in enumerate(cells[:ncols]):
+            txt = ' '.join(plain_text(bl['c']) for bl in _cell_blocks(c) if bl.get('t') in ('Plain','Para'))
+            col[j] = max(col[j], len(txt))
+    return col
+
+def _is_wide(col_chars, ncols, mincols, fit):
+    """是否转横向：自然总宽 > 纵向可用宽 × fit(放不进纵向)，或列数 ≥ mincols(手动 override)。"""
+    return sum(_col_nat(col_chars)) > TBL_DXA_PORTRAIT * fit or (mincols and ncols >= mincols)
+
+def render_table(tbl, mincols, fit):
     # tbl c = [attr, caption, colspec, head, bodies, foot]
     colspec = tbl['c'][2]; ncols = len(colspec)
     head = tbl['c'][3]; bodies = tbl['c'][4]
@@ -288,14 +312,15 @@ def render_table(tbl, mincols):
     # longtable 表头常在 body 重复，去重首行
     if head_txt and data_txt and head_txt[-1] == data_txt[0]:
         data_txt = data_txt[1:]
-    # 按内容分配列宽：col_chars[j] = 第 j 列最长单元格字符数(代理自然宽)
-    is_wide = ncols >= mincols
-    total = TBL_DXA_LANDSCAPE if is_wide else TBL_DXA_PORTRAIT
-    col_chars = [1]*ncols
+    # col_chars[j]=第 j 列最长单元格字符数(自然宽代理)；col_word[j]=最长单词(列下限，防折断)
+    col_chars = [1]*ncols; col_word = [1]*ncols
     for row in head_txt + data_txt:
         for j in range(min(ncols, len(row))):
             col_chars[j] = max(col_chars[j], len(row[j]))
-    widths = _col_widths(col_chars, total)
+            col_word[j] = max(col_word[j], max((len(w) for w in row[j].split()), default=1))
+    is_wide = _is_wide(col_chars, ncols, mincols, fit)   # 按内容宽度判定(放不进纵向才转横向)
+    total = TBL_DXA_LANDSCAPE if is_wide else TBL_DXA_PORTRAIT
+    widths = _col_widths(col_chars, col_word, total)
     # 全框线 9pt 表
     border = '<w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:start w:val="single" w:sz="4" w:color="000000"/><w:end w:val="single" w:sz="4" w:color="000000"/></w:tcBorders>'
     def cell_xml(text, bold, j):
@@ -323,11 +348,12 @@ def _cell_blocks(cell):
     # pandoc cell = [attr, alignment, rowspan, colspan, blocks]
     return cell[4] if isinstance(cell,list) and len(cell)>=5 else (cell.get('c',[None,None,None,None,[]])[4] if isinstance(cell,dict) else [])
 
-def _is_wide_block(b, mincols):
-    """该块是否为(或包裹着)宽表——pandoc 把浮动表包进 Div[Table]，故需穿透 Div。
-    用于让相邻横向宽表续在同一横向节、避免夹出空白纵向页。"""
-    if b['t'] == 'Table': return len(b['c'][2]) >= mincols   # colspec 长度 = 列数
-    if b['t'] == 'Div': return any(_is_wide_block(k, mincols) for k in b['c'][1])
+def _is_wide_block(b, mincols, fit):
+    """该块是否为(或包裹着)横向宽表——pandoc 把浮动表包进 Div[Table]，故需穿透 Div。
+    判定与 render_table 一致(按内容宽度)，用于让相邻横向宽表续在同一横向节、避免夹出空白纵向页。"""
+    if b['t'] == 'Table':
+        return _is_wide(_table_colchars(b), len(b['c'][2]), mincols, fit)
+    if b['t'] == 'Div': return any(_is_wide_block(k, mincols, fit) for k in b['c'][1])
     return False
 
 # ───────────────────────── 正文渲染 ─────────────────────────
@@ -336,8 +362,8 @@ NO_BREAK = {'acknowledgements','acknowledgments','author contributions','contrib
             'data availability','data sharing statement','funding','author contribution'}
 
 class Ctx:
-    def __init__(s, resource_paths, mincols, pkg):
-        s.rp = resource_paths; s.mincols = mincols; s.pkg = pkg
+    def __init__(s, resource_paths, mincols, pkg, landscape_fit=LANDSCAPE_FIT):
+        s.rp = resource_paths; s.mincols = mincols; s.pkg = pkg; s.landscape_fit = landscape_fit
         s.fig_n = 0; s.tab_n = 0; s.rels = []; s.media = []; s.next_rid = 1000; s.in_refs = False; s.ref_n = 0
         s.supp = False          # 进入补充材料后：图/表改用 S 编号
         s.s_fig_n = 0; s.s_tab_n = 0; s.draw_n = 0   # S 计数器 + 图形对象唯一 id 计数(与题注号解耦)
@@ -391,7 +417,7 @@ def table_block(ctx, tbl):
     cap_blocks = tbl['c'][1][1]
     cap_inlines = cap_blocks[0]['c'] if cap_blocks else []
     cap_p = para(caption_runs('Table', label, cap_inlines), jc='both', before=120, after=160, line=360)
-    tbl_xml, is_wide = render_table(tbl, ctx.mincols)
+    tbl_xml, is_wide = render_table(tbl, ctx.mincols, ctx.landscape_fit)
     # 只返回 题注+表(不含分节段)；横向分节由 render_blocks 处理，
     # 以便把紧随的表脚注一并圈进横向节(否则脚注被挤到下一页)。
     return cap_p + tbl_xml, is_wide
@@ -409,7 +435,7 @@ def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True, is_top
                     out.append(footnote_para(txt.replace(NOTE_SENTINEL, '').strip())); continue
                 if not txt.strip() and not any(n.get('t')=='Image' for n in b['c']):
                     continue
-            if not _is_wide_block(b, ctx.mincols):
+            if not _is_wide_block(b, ctx.mincols, ctx.landscape_fit):
                 out.append(ctx.landscape_close); ctx.landscape_close = None; closed_ls = True
             # 否则：下一块仍是横向宽表 → 不收尾、不另插 pre，续在同一横向节
         if t == 'Header':
@@ -634,7 +660,10 @@ def main():
     ap.add_argument('--resource-path', action='append', default=[])
     ap.add_argument('--bibliography')
     ap.add_argument('--styles', default=DEFAULT_STYLES)
-    ap.add_argument('--landscape-mincols', type=int, default=6)
+    ap.add_argument('--landscape-fit', type=float, default=LANDSCAPE_FIT,
+                    help=f'自然总宽 > 纵向页宽×此值 → 转横向(默认 {LANDSCAPE_FIT})；调大=更倾向纵向，调小=更倾向横向')
+    ap.add_argument('--landscape-mincols', type=int, default=99,
+                    help='可选硬性 override：列数 >= N 一律横向(默认 99=关；默认只按 --landscape-fit 的内容宽度判定)')
     ap.add_argument('--body-only', action='store_true',
                     help='片段模式：跳过 title page/Summary，只渲染正文(首个大节不插前导分页符)')
     a = ap.parse_args()
@@ -652,7 +681,7 @@ def main():
     # 解包样式资产包
     pkg = '/tmp/_subfmt_pkg'; shutil.rmtree(pkg, ignore_errors=True); os.makedirs(pkg)
     with zipfile.ZipFile(a.styles) as z: z.extractall(pkg)
-    ctx = Ctx(rp, a.landscape_mincols, pkg)
+    ctx = Ctx(rp, a.landscape_mincols, pkg, a.landscape_fit)
 
     # 参考文献须在渲染正文前解析：① 建 cite key→编号映射(供正文上标引用) ② 决定插入位置
     items = None

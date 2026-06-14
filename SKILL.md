@@ -27,7 +27,8 @@ python3 scripts/build_submission.py INPUT -o OUT.docx \
     [--bibliography FILE]         # 参考文献源(.tex/.bbl 的 thebibliography 最佳，或 pandoc 可读格式)；
                                   #   .tex/.bbl 还会驱动正文 \cite 的上标编号(按 \bibitem 顺序)
     [--styles STYLES.docx]        # 样式资产包(默认 assets/reference_styles.docx)
-    [--landscape-mincols N]       # 列数 >= N 的表判为宽表→横向页(默认 6)
+    [--landscape-fit F]           # 自然总宽 > 纵向页宽×F → 转横向(默认 1.6)；调大=更倾向纵向、调小=更倾向横向
+    [--landscape-mincols N]       # 可选 override：列数 >= N 一律横向(默认 99=关；平时只按 --landscape-fit 的宽度判定)
     [--body-only]                 # 片段模式：跳过 title page/Summary，只渲染正文(首个大节不插前导分页符)
 ```
 
@@ -67,8 +68,9 @@ python3 scripts/build_submission.py paper.tex -o paper_submission.docx \
 - 9 处分页(大节前各一)；声明段(Acknowledgements/Contributions/Conflicts/Data availability 等)连排同页。
 - title page：作者合段+上标单位字母+`*/**`通讯+单位 address 自动"a."编号+通讯邮箱行。
 - Summary：4 小标题独立粗体段+正文；Keywords 标签加粗+分号分隔。
-- 表：全框线 sz=4、单元格 9pt(段落 line=240/before0/after0 单倍行距)、首列左/数据列中、表块居中；表头加粗；中点小数(`\cdot`→·)；宽表(≥N 列)横向(表脚注留同一横向节内跟在表后；相邻横向宽表续在同一横向节、横向表后大节省 pagebreak→无空白页)。
-- 列宽：**按各列最长单元格内容自动分配**(非等分)，使表尽量不换行→整体高度最短；列宽合计=页面可用宽。
+- 表：全框线 sz=4、单元格 9pt(段落 line=240/before0/after0 单倍行距)、首列左/数据列中、表块居中；表头加粗；中点小数(`\cdot`→·)。
+- 横/纵：**按内容自然宽判定**——自然总宽 > 纵向页宽×`--landscape-fit`(默认 1.6)才转横向，否则压进纵向(故"列多但放得下"的表保持纵向)；表脚注留同一横向节跟在表后；相邻横向宽表续在同一横向节、横向表后大节省 pagebreak→无空白页。
+- 列宽：**按各列最长单元格内容自动分配**(非等分)，每列不低于其最长单词宽(数字/单词不折断)，使表尽量不换行→整体高度最短；列宽合计=页面可用宽。
 - 题注：表上(line=360)/图下(line=240)，"Table N./Figure N." 加粗 9pt 前缀；表脚注 9pt iCs。
 - 正文引用：`\cite{key}` → 上标编号(按 `--bibliography` 的 `\bibitem` 顺序)，连续段连字符 `2-3`、跳号逗号 `7,9`。
 - 补充材料：进入 "Supplementary*" 大节后图/表自动切 `Table S1…`/`Figure S1…`。
@@ -93,8 +95,7 @@ pdftoppm -jpeg -r 95 /tmp/OUT.pdf /tmp/p && # 读 /tmp/p-*.jpg 抽查 title page
 
 - 完整 title page 需输入含作者元数据：`.tex` 走 elsarticle 适配器(`\author/\affiliation/\ead`)；
   其它格式取 pandoc meta(可能只有作者名，无单位/通讯)。
-- 宽表横向按列数(`--landscape-mincols`)判断，故 landscape 节数随实际宽表数变化(不强行等于真值的"2 横")。
-- 列宽自动按内容分配(见上)：用字符数作宽度代理(`char_dxa≈95`)，绝大多数表能压到不换行；列特别多(如 10 列宽表)时长表头仍可能换行，属预期。
+- 横/纵与列宽都用字符数作宽度代理(`CHAR_DXA≈95`)；`--landscape-fit` 阈值与 `CHAR_DXA` 在 `scripts/build_submission.py` 顶部，要整体更紧/更松改这两个数。列特别多(如 10 列宽表)时长表头仍可能换行，属预期。
 - Table 1 表头在真值里是**不加粗**的唯一例外，引擎对所有表头统一加粗(不识别该特例)。
 - 引擎覆写整套格式，因此输入里的直接排版会被丢弃(这是目的)。
 

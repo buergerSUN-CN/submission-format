@@ -113,7 +113,8 @@
 - **参考文献位置**：`--bibliography` 生成的 References 块（分页符 + 14pt 标题 + 左对齐 `jc=start` 编号条目）插在**首个 Supplementary 大节之前**（真值顺序：…Acknowledgements → References → Supplementary…）；无补充材料时置于文末。
 - **LaTeX 预处理（让 pandoc 能解析）**：`\input` 先**递归内联**（否则被包含文件里的 sideways/resizebox 漏改、宽表全丢；文献库 thebibliography 不内联）→ `sidewaystable→table` + 去 `\resizebox{}{}{}` 包裹 + 展开 `\multicolumn`（否则整行分类小标题被 pandoc 丢弃）+ `L/R/C{宽}→p{宽}`。`\input` 找不到原路径时按 basename 在 `--resource-path` 子树里兜底搜索。
 - **表脚注识别**：`\scriptsize`/`\footnotesize` 预处理期换成哨兵 → 段首带哨兵的段落判为表脚注，渲染为 9pt iCs（见 1.6）。
-- **列宽按内容自动分配**（`render_table`/`_col_widths`）：列宽 ∝ 该列最长单元格字符数（字符宽代理 `char_dxa≈95` + 单元格内边距）；自然宽合计 ≤ 可用宽则等比放大（全列 ≥ 自然宽、不换行），否则等比压缩（带列下限）。目的：尽量不换行、表整体高度最短。`tblW`/`gridCol`/`tcW` 均用 dxa（纵向 8306 / 横向 13958），不再等分。
+- **横/纵向按内容宽度判定**（`_is_wide`，取代旧的"列数 ≥ N"）：各列自然宽 = 最长单元格字符数 × `CHAR_DXA(95)` + 内边距；**自然总宽 > 纵向可用宽(8306) × `--landscape-fit`(默认 1.6) 才转横向**，否则压进纵向页。故"列多但纵向放得下"的表（如 7 列的 Table S6/S7，自然宽≈1.25–1.29×纵向）保持纵向；只有真宽的 Table 2/3/4（1.73–2.80×）转横向。`--landscape-mincols`（默认 99=关）为可选硬性 override。
+- **列宽按内容自动分配**（`render_table`/`_col_widths`）：列宽 ∝ 该列最长单元格字符数（自然宽）；自然宽合计 ≤ 可用宽则等比放大（全列 ≥ 自然宽、不换行），否则等比压缩，但**每列不低于其最长单词宽**（数字/单词不折断，如 "73" 不被拆成 7/3）。目的：尽量不换行、表整体高度最短。`tblW`/`gridCol`/`tcW` 均用 dxa（纵向 8306 / 横向 13958），不再等分。
 - **横向表脚注归位 + 无空白页**（`render_blocks` 用 `ctx.landscape_close`）：宽表的 `LANDSCAPE` 收尾分节段**推迟到表脚注之后**插入（脚注/空段并入横向节、遇正文内容才收尾），状态放 `ctx` 上以跨 pandoc 的 `Div[Table]` 浮动包裹递归共享——否则表脚注被挤到表后的纵向页。**相邻横向宽表**（`_is_wide_block` 穿透 Div 判定）续在**同一横向节**、不另插 `pre` 纵向空段（否则两表间夹出空白纵向页）；**横向表后紧跟的大节标题**省掉 `pagebreak()`（横向分节符已换页，否则多一空白页）。RIC 正文/小标题须显式 `sz=22`（address 样式默认 12pt，不写就继承成 12pt）。
 
 ---
