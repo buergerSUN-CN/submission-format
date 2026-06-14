@@ -5,6 +5,11 @@ description: "把任意稿件(Markdown/LaTeX/Word/HTML 等)渲染成用户的标
 
 # Submission Format 引擎
 
+> ⚠️ **渲染投稿 docx 一律走 `build_submission.py`。** 禁止用 docx-js / python-docx 手工
+> 复刻本格式——手工必漏 `docGrid linePitch=312`、分页符机制(易误用 `pageBreakBefore`)、
+> 全 `Normal` 直接格式等。唯一例外是引擎不支持的布局(如改前/改后高亮对照)；此时手写须逐项
+> 对照 `references/target-format-spec.md` 自检：`docGrid=312` / 0 `pageBreakBefore` / 0 `Heading*` / 全 `Normal`。
+
 把任意稿件渲染成用户的 clean 投稿 Word 格式。**这是个通用引擎**：内容统一从
 pandoc AST 抽取，按固定的格式规格(`references/target-format-spec.md`)程序化生成
 全 `Normal` 段落 + 直接格式的 docx。不针对任何具体稿件硬编码。
@@ -22,7 +27,10 @@ python3 scripts/build_submission.py INPUT -o OUT.docx \
     [--bibliography FILE]         # 单独的参考文献源(.tex/.bbl 的 thebibliography，或 pandoc 可读格式)
     [--styles STYLES.docx]        # 样式资产包(默认 assets/reference_styles.docx)
     [--landscape-mincols N]       # 列数 >= N 的表判为宽表→横向页(默认 6)
+    [--body-only]                 # 片段模式：跳过 title page/Summary，只渲染正文(首个大节不插前导分页符)
 ```
+
+渲染**完整 manuscript** 用默认模式(出 title page + Summary)；渲染**片段**(如单独某节、改前/改后对照、补充材料块)加 `--body-only`，否则会被硬塞一个空 title page + Summary。
 
 INPUT 支持 pandoc 能读的格式(.md/.tex/.docx/.html/.rst/...)。PDF 请先转文本再喂。
 

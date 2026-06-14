@@ -10,6 +10,7 @@ Usage:
         [--bibliography FILE]      单独的参考文献源(thebibliography/.bib/.md)，附为 References
         [--styles STYLES.docx]     样式资产包(默认 assets/reference_styles.docx)
         [--landscape-mincols N]    >=N 列的表判为宽表→横向页(默认 6)
+        [--body-only]              片段模式：跳过 title page/Summary，只渲染正文
 
 INPUT 支持 pandoc 能读的任意格式(.md/.tex/.docx/.html/...)；.pdf 请先转文本。
 完整 title page 需要输入含作者/单位/通讯元数据(elsarticle 的 \\author/\\affiliation/\\ead
@@ -330,7 +331,8 @@ def table_block(ctx, tbl):
         return pre + cap_p + tbl_xml + post
     return cap_p + tbl_xml
 
-def render_blocks(blocks, out, ctx, section_breaks=True):
+def render_blocks(blocks, out, ctx, section_breaks=True, lead_break=True):
+    seen_h1 = False
     for b in blocks:
         t = b['t']
         if t == 'Header':
@@ -338,10 +340,12 @@ def render_blocks(blocks, out, ctx, section_breaks=True):
             if lvl == 1:
                 ctx.in_refs = key in ('references','bibliography','reference list')
                 if ctx.in_refs: ctx.ref_n = 0
-                if section_breaks and key not in NO_BREAK:
+                no_lead = not lead_break and not seen_h1   # 片段模式：首个大节不插前导分页符
+                seen_h1 = True
+                if section_breaks and key not in NO_BREAK and not no_lead:
                     out.append(pagebreak()); out.append(h1(plain))
                 else:
-                    out.append(h1(plain, before=480))
+                    out.append(h1(plain, before=None if no_lead else 480))
             else:
                 out.append(h2(plain))
         elif t in ('Para','Plain'):
@@ -462,6 +466,8 @@ def main():
     ap.add_argument('--bibliography')
     ap.add_argument('--styles', default=DEFAULT_STYLES)
     ap.add_argument('--landscape-mincols', type=int, default=6)
+    ap.add_argument('--body-only', action='store_true',
+                    help='片段模式：跳过 title page/Summary，只渲染正文(首个大节不插前导分页符)')
     a = ap.parse_args()
     rp = [os.path.abspath(p) for p in a.resource_path]
 
@@ -479,8 +485,8 @@ def main():
     with zipfile.ZipFile(a.styles) as z: z.extractall(pkg)
     ctx = Ctx(rp, a.landscape_mincols, pkg)
 
-    body = title_page(title, authors, affs, keywords, abstract)
-    render_blocks(ast['blocks'], body, ctx)
+    body = [] if a.body_only else title_page(title, authors, affs, keywords, abstract)
+    render_blocks(ast['blocks'], body, ctx, lead_break=not a.body_only)
     if a.bibliography:
         if a.bibliography.lower().endswith(('.tex','.bbl')):
             items = parse_bibitems(a.bibliography)
