@@ -9,7 +9,8 @@ Usage:
         [--resource-path DIR]...   图片/资源查找目录(可多次)
         [--bibliography FILE]      单独的参考文献源(thebibliography/.bib/.md)，附为 References
         [--styles STYLES.docx]     样式资产包(默认 assets/reference_styles.docx)
-        [--landscape-mincols N]    >=N 列的表判为宽表→横向页(默认 6)
+        [--landscape-fit F]        自然总宽 > 纵向页宽×F → 转横向(默认 1.6)
+        [--landscape-mincols N]    可选 override：列数 >= N 一律横向(默认 99=关)
         [--body-only]              片段模式：跳过 title page/Summary，只渲染正文
 
 INPUT 支持 pandoc 能读的任意格式(.md/.tex/.docx/.html/...)；.pdf 请先转文本。

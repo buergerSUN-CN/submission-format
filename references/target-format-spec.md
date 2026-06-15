@@ -2,7 +2,7 @@
 
 > 真值文件：`mevo_manuscript.docx`（解包后 `word/document.xml`、`word/styles.xml`）
 > 由多 agent 调研逆向，所有数值已对 XML 复核一致（pStyle 分布、9 处分页符、11 表 / 10 图 / 0 anchor、6 sectPr / 2 landscape、0 ind、sz/jc 分布、docGrid linePitch=312、0 pageBreakBefore 等）。
-> 用途：重写 submission-format skill 的格式标准。
+> 用途：submission-format 引擎实现的格式标准——要改格式改这里、引擎按此渲染。
 
 ---
 
@@ -104,7 +104,7 @@
 - **表脚注在表下方**，9pt，带 iCs，jc=both，before=0 after=120。
 
 **横向页**：宽表 Table 2/3/4 放横向 A4（`sectPr orient=landscape 16838×11906`，margin left/right=1080）；其余与补充材料为纵向 A4。全文 6 个 sectPr（2 横 + 4 纵），每个带 docGrid linePitch=312。
-（注：横向页由引擎按"列数 ≥ `--landscape-mincols`（默认 6）"判定，故 landscape 节数随实际宽表数量变化，与真值的"2 横"不必相等——真值是更早的数据版本、宽表更少。）
+（注：横向页由引擎按**内容自然宽**判定（见 §1.7 的 `--landscape-fit`，默认 1.6），故 landscape 节数随实际宽表数量变化，与真值的"2 横"不必相等——真值是更早的数据版本、宽表更少。）
 
 ### 1.7 正文引用 / 补充材料编号 / 参考文献位置（引擎行为，2026-06 校正补充）
 
@@ -116,69 +116,3 @@
 - **横/纵向按内容宽度判定**（`_is_wide`，取代旧的"列数 ≥ N"）：各列自然宽 = 最长单元格字符数 × `CHAR_DXA(95)` + 内边距；**自然总宽 > 纵向可用宽(8306) × `--landscape-fit`(默认 1.6) 才转横向**，否则压进纵向页。故"列多但纵向放得下"的表（如 7 列的 Table S6/S7，自然宽≈1.25–1.29×纵向）保持纵向；只有真宽的 Table 2/3/4（1.73–2.80×）转横向。`--landscape-mincols`（默认 99=关）为可选硬性 override。
 - **列宽按内容自动分配**（`render_table`/`_col_widths`）：列宽 ∝ 该列最长单元格字符数（自然宽）；自然宽合计 ≤ 可用宽则等比放大（全列 ≥ 自然宽、不换行），否则等比压缩，但**每列不低于其最长单词宽**（数字/单词不折断，如 "73" 不被拆成 7/3）。目的：尽量不换行、表整体高度最短。`tblW`/`gridCol`/`tcW` 均用 dxa（纵向 8306 / 横向 13958），不再等分。
 - **横向表脚注归位 + 无空白页**（`render_blocks` 用 `ctx.landscape_close`）：宽表的 `LANDSCAPE` 收尾分节段**推迟到表脚注之后**插入（脚注/空段并入横向节、遇正文内容才收尾），状态放 `ctx` 上以跨 pandoc 的 `Div[Table]` 浮动包裹递归共享——否则表脚注被挤到表后的纵向页。**相邻横向宽表**（`_is_wide_block` 穿透 Div 判定）续在**同一横向节**、不另插 `pre` 纵向空段（否则两表间夹出空白纵向页）；**横向表后紧跟的大节标题**省掉 `pagebreak()`（横向分节符已换页，否则多一空白页）。RIC 正文/小标题须显式 `sz=22`（address 样式默认 12pt，不写就继承成 12pt）。
-
----
-
-## 第 2 部分 — 当前 pandoc 输出的差距清单
-
-> "mine" = 旧的 pandoc + reference.docx 输出（已废弃路线）。
-
-### 2.1 格式 / 机制差距（按严重度）
-
-| 严重度 | 维度 | 目标真值 | pandoc 输出 |
-|---|---|---|---|
-| HIGH | 段落样式机制 | 1045 Normal + 直接格式 | 12 种语义样式（Compact/BodyText/Heading1/2/Abstract…）机制相反 |
-| HIGH | 分页符 | 9 个 | 0 个 |
-| HIGH | 分节/横向页 | 6 sectPr（含 2 landscape 放宽表） | 1 纵向，无横向，宽表溢出 |
-| HIGH | docGrid 行网格 | 每节 linePitch=312（≈1.5x 观感） | 无，正文 1.16x 明显更紧 |
-| HIGH | 标题页作者块 | 单段、上标字母 a、*/** 通讯、单位 address 自动 a. 编号 | 每位作者各占一居中 Author 段，无上标无标记 |
-| HIGH | 摘要 | "Summary" 14pt 粗 + 独立粗体小标题 + 正文 11pt jc=both | "Abstract" 居中 10pt(sz=20)，小标题做成 run-in 内联 |
-| HIGH | 图/表数量 | 10 图 / 11 表 | 5 图 / 2 真表（其余为空壳） |
-| HIGH | References | 完整章节 + 30 条 | 完全缺失 |
-| MEDIUM | 表格直接格式 | 满宽 + 四边框 + 9pt + 数据列居中 | tblStyle + auto 宽 + 仅 firstRow 底线 + 11pt 左 |
-| MEDIUM | 图注/表注 | 9pt，"Figure N./Table N." 加粗前缀 | 继承 11pt，无编号前缀 |
-| MEDIUM | 标题对齐/间距 | 主标题 jc=start(左)；大节 before=0/480 | Title 居中；Heading1 before=360 jc=start |
-| LOW | 小节标题 | 11pt 内联粗体，不加段前距 | Heading2 sz=22 + before=160 |
-| LOW | Keywords | "Keywords:" 标签加粗 + 分号分隔 | 无标签，逗号分隔 |
-
-### 2.2 漏掉的具体清单
-
-- **缺 9 张表**：Table 2/3/4（主）+ Table S2-S7（补充）。pandoc 仅含 Table 1 与 S1。
-- **缺 5 张图（图像）**：Figure S1-S5（仅题注无图像）。主图 1-5 齐。
-- **缺整个 References 章节**（30 条）。
-- **缺 2 个横向 landscape 小节**。
-- **缺全部 9 个分页符**。
-- **缺标题页结构件**：上标机构字母、机构地址段、两行 Corresponding authors。
-- **缺 "Keywords:" 标签**。
-
-> ⚠️ 数据版本（内容，非格式）：逆向所用样式 docx 与后续测试稿是两个不同的数据版本（样本量与统计量不同）。skill 只负责**格式**，内容忠实于输入，不涉及具体数据。
-
----
-
-## 第 3 部分 — skill 重做方案
-
-**核心矛盾**：目标要 ① clean（全 Normal+直接格式）② 9 分页符 ③ 完整结构化 title page ④ 全部 10 图/11 表/横向节/References；而 pandoc+reference-doc 必然产语义样式且丢 title page/分页/部分图表——机制根本相反。
-
-### 路线对比
-
-- **路线 A — 以 `mevo_manuscript.docx` 为骨架模板、脚本灌入新内容**：clean/分页/title page/图表壳天然 100% 保真；但对任意新稿内容映射困难、多输入弱、强耦合具体文档。clean 5 / 分页 5 / title 5 / 图表 5(沿用)~1(换新) / 多输入 **1**。
-- **路线 B — pandoc 后处理 XML（压平 pStyle→Normal+内联、插分页、重建 title page、重写表格…）**：保留 pandoc 多输入与正文/引用解析；但**最复杂最脆**，等于既付 pandoc 又付重建。clean 4 / 分页 4 / title 3 / 图表 3 / 多输入 **5**。
-- **路线 C — python-docx 程序化逐段重建**：完全掌控、与真值逐位对齐；短板是需自建多输入解析。clean 5 / 分页 5 / title 5 / 图表 5(前提输入抽全) / 多输入 3。
-
-### 推荐：路线 C 为主，借鉴 A 的"模板锚点"兜底
-
-理由：① 目标本质是"格式规格"而非"某一篇"，A 泛化 1/5 只适合做 golden 对照；② B 的最大成本（压平+内联）正是最脆处，等于双重付费；③ C 在 clean/分页/title page 三个 HIGH 维度满分，正中差距最大处；短板"多输入解析"可分层：**输入→结构化中间表示**（用 pandoc/markitdown 仅抽内容，不依赖其样式输出）+ **中间表示→目标 docx**（python-docx/oxml 按本规格组装）解耦。
-
-### 落地核对清单（路线 C 成功判据，逐项可验）
-
-- pStyle 全 Normal（+必要时 author/address）；0 个 Heading*；标题=Normal+直接 b+sz。
-- 大节标题 sz=28、jc=both、before=0 after=160（首）/before≈480；小节仅 b、11pt、不加段前距。
-- 正文 Normal+jc=both+run 直接 TNR；不写 spacing/sz 覆盖。
-- 9 个 `<w:br type=page>`（Summary/RIC/Intro/Methods/Results/Discussion/Conclusion/References/Supplementary 前各一）；四声明段连排同页。
-- title page：作者合段+上标 a+*/**+address 自动编号 lvlText="%1."+两行通讯邮箱。
-- 摘要 "Summary" 14pt 粗；4 小标题独立粗体段 11pt；正文 11pt jc=both；Keywords 标签加粗+分号。
-- References 30 条手打字面编号、11pt、**jc=start（左，非 both）**、无缩进。
-- 表格四边 single sz=4、单元格 9pt、首列 jc=both/数据列 center、表块 jc=center、满宽 5000pct；表头加粗（Table 1 例外）。
-- 题注：表上/图下，"Table N./Figure N." 标签加粗 9pt+描述 9pt、jc=both。
-- 2 个 landscape sectPr（w=16838，margin 1080）放宽表；每 sectPr 带 docGrid linePitch=312。
-- 内容完整：10 图（含 S1-S5）+ 11 表（含 Table 2/3/4 + S2-S7）+ References。

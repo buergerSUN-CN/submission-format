@@ -28,7 +28,10 @@ against a fixed format spec. Nothing about any specific manuscript is hard-coded
 python3 scripts/build_submission.py INPUT -o OUT.docx \
     [--resource-path DIR]...      # folders to search for figures (also for LaTeX \input)
     [--bibliography FILE]         # standalone references source (thebibliography / pandoc-readable)
-    [--landscape-mincols N]       # tables with >= N columns become landscape (default 6)
+    [--styles STYLES.docx]        # style asset pack (default assets/reference_styles.docx)
+    [--landscape-fit F]           # natural total width > portrait width × F → landscape (default 1.6)
+    [--landscape-mincols N]       # optional override: >= N columns forces landscape (default 99 = off)
+    [--body-only]                 # fragment mode: skip title page / Summary, render body only
 ```
 
 `INPUT` can be `.md` / `.tex` / `.docx` / `.html` / … (for PDF, extract text first).

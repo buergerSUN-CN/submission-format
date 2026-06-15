@@ -71,7 +71,7 @@ python3 scripts/build_submission.py paper.tex -o paper_submission.docx \
 - 表：全框线 sz=4、单元格 9pt(段落 line=240/before0/after0 单倍行距)、首列左/数据列中、表块居中；表头加粗；中点小数(`\cdot`→·)。
 - 横/纵：**按内容自然宽判定**——自然总宽 > 纵向页宽×`--landscape-fit`(默认 1.6)才转横向，否则压进纵向(故"列多但放得下"的表保持纵向)；表脚注留同一横向节跟在表后；相邻横向宽表续在同一横向节、横向表后大节省 pagebreak→无空白页。
 - 列宽：**按各列最长单元格内容自动分配**(非等分)，每列不低于其最长单词宽(数字/单词不折断)，使表尽量不换行→整体高度最短；列宽合计=页面可用宽。
-- 题注：表上(line=360)/图下(line=240)，"Table N./Figure N." 加粗 9pt 前缀；表脚注 9pt iCs。
+- 题注：表上/图下均 line=240(1.0)，"Table N./Figure N." 加粗 9pt 前缀；表脚注 9pt iCs。
 - 正文引用：`\cite{key}` → 上标编号(按 `--bibliography` 的 `\bibitem` 顺序)，连续段连字符 `2-3`、跳号逗号 `7,9`。
 - 补充材料：进入 "Supplementary*" 大节后图/表自动切 `Table S1…`/`Figure S1…`。
 - References：左对齐(jc=start，与正文 both 不同)、无缩进、11pt、手打编号；**排在首个 Supplementary 大节之前**。
